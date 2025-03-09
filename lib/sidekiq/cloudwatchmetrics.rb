@@ -244,7 +244,7 @@ module Sidekiq::CloudWatchMetrics
         rescue Aws::CloudWatch::Errors::ExpiredToken => e
           if retry_count < 3
             retry_count += 1
-            log(:warn, "#{@client.class} security token expired. Refreshing client and retrying... (attempt #{retry_count})")
+            log(:warn, "#{@client.class} security token expired (expiration: #{@client.config.credentials.expiration}). Refreshing client and retrying... (attempt #{retry_count})")
             refresh_client_credentials!
             retry
           else
