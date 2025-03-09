@@ -45,7 +45,7 @@ module Sidekiq::CloudWatchMetrics
 
     INTERVAL = 60 # seconds
 
-    def initialize(config: Sidekiq, client: Aws::CloudWatch::Client.new, namespace: "Sidekiq", process_metrics: true, additional_dimensions: {})
+    def initialize(config: Sidekiq, client: Aws::CloudWatch::Client.new, namespace: "Sidekiq", process_metrics: true, additional_dimensions: {}, external_logger: nil)
       # Sidekiq 6.5+ requires @config, which defaults to the top-level
       # `Sidekiq` module, but can be overridden when running multiple Sidekiqs.
       @config = config
@@ -53,10 +53,11 @@ module Sidekiq::CloudWatchMetrics
       @namespace = namespace
       @process_metrics = process_metrics
       @additional_dimensions = additional_dimensions.map { |k, v| {name: k.to_s, value: v.to_s} }
+      @external_logger = external_logger
     end
 
     def start
-      logger.debug { "Starting Sidekiq CloudWatch Metrics Publisher" }
+      log(:debug, "Starting Sidekiq CloudWatch Metrics Publisher")
 
       @done = false
       @thread = safe_thread("cloudwatch metrics publisher", &method(:run))
@@ -67,12 +68,13 @@ module Sidekiq::CloudWatchMetrics
     end
 
     def run
-      logger.info { "Started Sidekiq CloudWatch Metrics Publisher" }
+      log(:info, "Started Sidekiq CloudWatch Metrics Publisher")
 
       # Publish stats every INTERVAL seconds, sleeping as required between runs
       now = Time.now.to_f
       tick = now
       until @stop
+        # HERE: This is pretty noisy so I won't use Publisher#log
         logger.debug { "Publishing Sidekiq CloudWatch Metrics" }
         publish
 
@@ -81,7 +83,7 @@ module Sidekiq::CloudWatchMetrics
         sleep(tick - now) if tick > now
       end
 
-      logger.debug { "Stopped Sidekiq CloudWatch Metrics Publisher" }
+      log(:debug, "Stopped Sidekiq CloudWatch Metrics Publisher")
     end
 
     def publish
@@ -242,11 +244,11 @@ module Sidekiq::CloudWatchMetrics
         rescue Aws::CloudWatch::Errors::ExpiredToken => e
           if retry_count < 3
             retry_count += 1
-            logger.warn("#{@client.class} security token expired. Refreshing client and retrying... (attempt #{retry_count})")
+            log(:warn, "#{@client.class} security token expired. Refreshing client and retrying... (attempt #{retry_count})")
             refresh_client_credentials!
             retry
           else
-            logger.error("Exceeded retry limit for #{@client.class} security token refresh. Error: #{e.message}")
+            log(:error, "Exceeded retry limit for #{@client.class} security token refresh. Error: #{e.message}")
             raise # Re-raise the error after exceeding the retry limit
           end
         end
@@ -254,7 +256,7 @@ module Sidekiq::CloudWatchMetrics
     end
 
     def refresh_client_credentials!
-      logger.info("Refreshing #{@client.class} credentials...")
+      log(:info, "Refreshing #{@client.class} credentials...")
       @client.credentials.refresh!
     end
 
@@ -276,18 +278,25 @@ module Sidekiq::CloudWatchMetrics
     end
 
     def quiet
-      logger.debug { "Quieting Sidekiq CloudWatch Metrics Publisher" }
+      log(:debug, "Quieting Sidekiq CloudWatch Metrics Publisher")
       @stop = true
     end
 
     def stop
-      logger.debug { "Stopping Sidekiq CloudWatch Metrics Publisher" }
+      log(:debug, "Stopping Sidekiq CloudWatch Metrics Publisher")
       @stop = true
       @thread.wakeup
       @thread.join
     rescue ThreadError
       # Don't raise if thread is already dead.
       nil
+    end
+
+    private
+
+    def log(level, message)
+      logger.send(level) { message }
+      @external_logger.send(level, :aws_credentials, message) if @external_logger
     end
   end
 end
